@@ -1,0 +1,12 @@
+{
+  "Anil": {
+    "salt": "c881a3bcdba4456c58f1820aa62fa89c",
+    "password_hash": "1764d204dbe37df7353a0215feb9ac145adc19682705da6b6f535d59289b16a2",
+    "role": "admin"
+  },
+  "Battery": {
+    "salt": "ebd230a2f8c7cf2d00f0e370d1a8c906",
+    "password_hash": "2b8098f31ba860e62f206fcc7111402d938ffbc2a852e83a20004c9cbf6741b8",
+    "role": "operator"
+  }
+}
