@@ -84,7 +84,17 @@ def build_module_sub_id(
     if line not in ("1", "2", "3"):
         raise ValueError(f"Invalid line: {line}")
 
-    count = re.sub(r"\D", "", serial).zfill(4)[-4:]
+    digits = re.sub(r"\D", "", serial or "")
+    if not digits:
+        raise ValueError(f"Invalid module serial: {serial!r}")
+
+    serial_number = int(digits)
+    if not 0 <= serial_number <= 9999:
+        raise ValueError(
+            f"Module serial must be between 0000 and 9999; got {serial_number}."
+        )
+
+    count = f"{serial_number:04d}"
 
     return (
         f"{v_code}"
@@ -133,10 +143,23 @@ def build_all_module_ids(
     start_serial: str,
     count: int = 4,
 ) -> list[str]:
-    start = int(re.sub(r"\D", "", start_serial or "0") or "0")
+    digits = re.sub(r"\D", "", start_serial or "")
+    if not digits:
+        raise ValueError(f"Invalid starting module serial: {start_serial!r}")
+
+    start = int(digits)
+    if count < 1:
+        raise ValueError(f"Module ID count must be at least 1; got {count}.")
+
+    end = start + count - 1
+    if start < 0 or end > 9999:
+        raise ValueError(
+            f"Module serial sequence {start:04d}-{end:04d} exceeds the 0000-9999 range."
+        )
+
     ids: list[str] = []
     for offset in range(count):
-        serial = str(start + offset).zfill(4)[-4:]
+        serial = f"{start + offset:04d}"
         ids.append(
             build_full_module_id(
                 variant=variant, group=group, cell_mfr=cell_mfr,
