@@ -50,7 +50,7 @@ def _install_error_dialog(root: tk.Tk) -> None:
     
 #     def contact_admin():
 #         webbrowser.open("mailto:radarcalibration@ultraviolette.com?subject=Access%20Request%20to%20HV%20Label%20Printer")
-#         #webbrowser.open("https://teams.microsoft.com/l/chat/48:notes/conversations?context=%7B%22contextType%22%3A%22chat%22%7D?subject=Support%20Request")
+#         #webbrowser.open("https://teams.microsoft.com/l/chat/48:notes/conversations?context=%7B%22contextType%3A%22chat%22%7D?subject=Support%20Request")
 #         root.destroy()
         
     # frame = ttk.Frame(dialog, padding=24)
@@ -115,4 +115,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Test comment for branch verification
     main()
