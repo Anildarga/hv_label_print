@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
+from common.api_client import APIClientError
 
 from models.hv.gui.battery_parameters import build_battery_parameters_panel, set_battery_parameters
 from models.hv.gui.category_controls import add_category_field, bind_category_variant
@@ -158,6 +159,12 @@ class BatteryPackDummyGUI:
                 self.serial_number_var.set(serial)
         except (ValueError, KeyError):
             pass
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Serial configuration could not be saved. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
 
 
     def _build_ui(self) -> None:
@@ -510,10 +517,18 @@ class BatteryPackDummyGUI:
             return
 
         variant = variants[0]
-        serial = load_pack_serial()
-        if not serial:
-            self._rebuild_and_store_serial()
+        try:
             serial = load_pack_serial()
+            if not serial:
+                self._rebuild_and_store_serial()
+                serial = load_pack_serial()
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Cannot continue or print until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
+            return
 
         self.vars["variant"].set(variant)
         self._on_variant_or_revision_change()
@@ -622,13 +637,16 @@ class BatteryPackDummyGUI:
             serial_number=serial,
         )
 
-        excel_pw = self._session.excel_password if self._session else "06082003"
-        log_saved = False
         try:
-            append_scan_record(record, excel_password=excel_pw)
-            log_saved = True
+            append_scan_record(record)
+            next_serial = increment_pack_serial()
         except Exception as exc:
-            messagebox.showerror("Log Error", f"Could not able to write scan log:\n{exc}", parent=self.root)
+            messagebox.showerror(
+                "Server error",
+                f"Could not save the scan or allocate the next serial. Printing is blocked.\n\n{exc}",
+                parent=self.root,
+            )
+            return
 
         zpl = build_pack_qr_label(
             pack_qr_data=pack_qr,
@@ -641,14 +659,11 @@ class BatteryPackDummyGUI:
         )
         dispatch_zpl(self.root, zpl, self.print_var.get(), default_name=f"pack_{serial}.zpl", printer_name=PRINTER_DUMMY)
 
-        if log_saved:
-            increment_pack_serial()
-            self.root.after(_RESET_DELAY_MS, self._auto_reset)
-        else:
-            for module_var in self._module_vars:
-                module_var.set("")
-            self._reset_integration()
-            self.preview_var.set("")
+        self.serial_number_var.set(next_serial)
+        parsed_next = parse_serial_number(next_serial)
+        if parsed_next:
+            self.vars["serial_count"].set(parsed_next.serial_count)
+        self.root.after(_RESET_DELAY_MS, self._auto_reset)
 
     def _open_history(self) -> None:
         open_scan_history(self.root, print_mode=self.print_var.get(), variant=self.vars["variant"].get(), origin="dummy")
@@ -659,7 +674,15 @@ class BatteryPackDummyGUI:
         self._reset_integration()
         self.preview_var.set("")
         self._true_date = datetime.now().date()
-        new_serial = load_pack_serial()
+        try:
+            new_serial = load_pack_serial()
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not load the next serial. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
+            return
         self.serial_number_var.set(new_serial)
         _parsed = parse_serial_number(new_serial)
         if _parsed:
@@ -714,6 +737,13 @@ class BatteryPackDummyGUI:
             self._suppress_traces = False
         except ValueError:
             pass
+        except APIClientError as exc:
+            self._suppress_traces = False
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the serial configuration.\n\n{exc}",
+                parent=self.root,
+            )
 
     def _on_variant_or_revision_change(self, *_args: object) -> None:
         variant = self.vars["variant"].get()
@@ -795,10 +825,16 @@ class BatteryPackDummyGUI:
             except (ValueError, KeyError):
                 return
 
-        save_pack_serial(new_serial)
-        save_pack_serial_count(padded)
-
-        self.serial_number_var.set(new_serial)
+        try:
+            save_pack_serial(new_serial)
+            save_pack_serial_count(padded)
+            self.serial_number_var.set(new_serial)
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the serial count. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
 
     def _on_serial_number_typed(self, *_args: object) -> None:
         if self._suppress_traces:
@@ -823,7 +859,10 @@ class BatteryPackDummyGUI:
                 parent=self.root,
             )
             self._suppress_traces = True
-            self.serial_number_var.set(load_pack_serial())
+            try:
+                self.serial_number_var.set(load_pack_serial())
+            except APIClientError as exc:
+                messagebox.showerror("Server unavailable", str(exc), parent=self.root)
             self._suppress_traces = False
             return
 
@@ -835,7 +874,10 @@ class BatteryPackDummyGUI:
                 parent=self.root,
             )
             self._suppress_traces = True
-            self.serial_number_var.set(load_pack_serial())
+            try:
+                self.serial_number_var.set(load_pack_serial())
+            except APIClientError as exc:
+                messagebox.showerror("Server unavailable", str(exc), parent=self.root)
             self._suppress_traces = False
             return
 
@@ -860,8 +902,16 @@ class BatteryPackDummyGUI:
             messagebox.showwarning("Invalid Date", "upcoming dates are not allowed.", parent=self.root)
             return
 
-        save_pack_serial(serial.strip())
-        save_pack_serial_count(parsed.serial_count)
+        try:
+            save_pack_serial(serial.strip())
+            save_pack_serial_count(parsed.serial_count)
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the serial. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
+            return
         self._true_date = parsed.as_date
         self._suppress_traces = True
         try:

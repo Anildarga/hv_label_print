@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from common.api_client import APIClientError
 from models.hv.gui.battery_parameters import build_battery_parameters_panel, set_battery_parameters
 from models.hv.gui.category_controls import add_category_field, bind_category_variant
 from models.hv.gui.constants import VARIANT_OPTIONS, VARIANT_PARAMS, format_pack_qr_data, get_emark, get_type_of_reess
@@ -219,17 +220,7 @@ class BatteryPackIdGUI:
             mfg_date=self._mfg_date_for_serial(serial_number),
             pack_qr_data=pack_qr_data,
         )
-        self._store_serial_if_present()
-        dispatch_zpl(
-            self.root,
-            zpl,
-            self.print_var.get(),
-            default_name=f"pack_{serial_number}.zpl",
-            printer_name=PRINTER_PACK_ID,
-        )
-    
         now = datetime.now()
-        pw = self._session.excel_password if hasattr(self, "_session") and self._session else "06082003"
         record = PackIdScanRecord(
             date=self._mfg_date_for_serial(serial_number),
             time=now.strftime("%I:%M:%S %p").lstrip("0"),
@@ -238,9 +229,22 @@ class BatteryPackIdGUI:
             pack_qr_data=pack_qr_data,
         )
         try:
-            append_pack_id_scan_record(record, excel_password=pw)
-        except Exception:
-            pass
+            append_pack_id_scan_record(record)
+            self._store_serial_if_present()
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the pack scan. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
+            return
+        dispatch_zpl(
+            self.root,
+            zpl,
+            self.print_var.get(),
+            default_name=f"pack_{serial_number}.zpl",
+            printer_name=PRINTER_PACK_ID,
+        )
 
     def _reset_fields(self) -> None:
         self.scanner_var.set("")

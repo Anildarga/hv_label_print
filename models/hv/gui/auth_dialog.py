@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 from tkinter import messagebox, ttk
 
+from common.api_client import APIClientError
 from common.auth.user_store import ROLE_ADMIN, ROLE_OPERATOR, add_user, authenticate_user, delete_user, list_users
 
 
@@ -60,7 +61,15 @@ class LoginDialog(_CenteredDialog):
 
     def _submit(self) -> None:
         password = self.password_var.get()
-        ok, message, role = authenticate_user(self.username_var.get(), password)
+        try:
+            ok, message, role = authenticate_user(self.username_var.get(), password)
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not sign in. Check the server connection and try again.\n\n{exc}",
+                parent=self,
+            )
+            return
         if not ok:
             messagebox.showerror("Login", message, parent=self)
             return
@@ -123,7 +132,14 @@ class ManageUsersDialog(_CenteredDialog):
 
     def _refresh_users(self) -> None:
         self.users_listbox.delete(0, tk.END)
-        for username, role in list_users():
+        try:
+            users = list_users()
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server error", f"Could not load users:\n{exc}", parent=self
+            )
+            return
+        for username, role in users:
             role_label = "Admin" if role == ROLE_ADMIN else "Operator"
             label = f"{username}  ({role_label})"
             if username == self.current_user:
@@ -132,7 +148,11 @@ class ManageUsersDialog(_CenteredDialog):
 
     def _on_add(self) -> None:
         role = ROLE_ADMIN if self.new_role_var.get() == "Admin" else ROLE_OPERATOR
-        ok, message = add_user(self.new_username_var.get(), self.new_password_var.get(), role)
+        try:
+            ok, message = add_user(self.new_username_var.get(), self.new_password_var.get(), role)
+        except APIClientError as exc:
+            messagebox.showerror("Server error", f"Could not add user:\n{exc}", parent=self)
+            return
         if not ok:
             messagebox.showerror("Add User", message, parent=self)
             return
@@ -153,7 +173,11 @@ class ManageUsersDialog(_CenteredDialog):
         if not messagebox.askyesno("Remove User", f'Remove "{username}"?', parent=self):
             return
 
-        ok, message = delete_user(username, current_user=self.current_user)
+        try:
+            ok, message = delete_user(username, current_user=self.current_user)
+        except APIClientError as exc:
+            messagebox.showerror("Server error", f"Could not remove user:\n{exc}", parent=self)
+            return
         if not ok:
             messagebox.showerror("Remove User", message, parent=self)
             return

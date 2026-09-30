@@ -4,6 +4,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
+from common.api_client import APIClientError
 from models.hv.gui.layout import DISPLAY_FONT, FIELD_FONT, FIELD_IPADY, LABEL_FONT, HEADING_FONT
 from models.hv.gui.print_actions import dispatch_zpl
 from models.hv.gui.scan_history import open_scan_history
@@ -202,8 +203,15 @@ class BmsIdGUI:
     def _save_rework(self, kind: str, full_raw_id: str) -> None:
         if not self._pack_qr_raw or self._existing_record is None:
             return
-        pw = self._session.excel_password if self._session else "06082003"
-        ok = patch_rework(self._pack_qr_raw, kind, full_raw_id, excel_password=pw)
+        try:
+            ok = patch_rework(self._pack_qr_raw, kind, full_raw_id)
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the rework entry. Printing is blocked.\n\n{exc}",
+                parent=self.root,
+            )
+            return
         if not ok:
             messagebox.showwarning("Rework", "Dummy Pack id not found in scan history.", parent=self.root)
             return
@@ -241,12 +249,6 @@ class BmsIdGUI:
             cmb_serial=self._cmb_parsed.short_id,
             pack_qr_data=pack_qr,
         )
-        dispatch_zpl(
-            self.root, zpl, self.print_var.get(),
-            default_name=f"bmb_cmb_{self._bmb_parsed.short_id}.zpl",
-            printer_name=PRINTER_BMS_ID,
-        )
-
         now = datetime.now()
         record = BmsScanRecord(
             date=self._pack_date,
@@ -256,10 +258,20 @@ class BmsIdGUI:
             cmb_id=self._cmb_parsed.raw,
         )
         try:
-            excel_pw = self._session.excel_password if self._session else "06082003"
-            append_scan_record(record, excel_password=excel_pw)
-        except Exception:
-            pass
+            append_scan_record(record)
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the BMS scan. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
+            return
+
+        dispatch_zpl(
+            self.root, zpl, self.print_var.get(),
+            default_name=f"bmb_cmb_{self._bmb_parsed.short_id}.zpl",
+            printer_name=PRINTER_BMS_ID,
+        )
 
         self.root.after(_RESET_DELAY_MS, self._reset_display)
 

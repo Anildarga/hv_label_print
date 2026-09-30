@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from common.auth.user_store import ROLE_ADMIN, ROLE_OPERATOR
+from common.api_client import set_bearer_token
 
 
 class Session:
@@ -8,12 +9,10 @@ class Session:
     def __init__(self) -> None:
         self.username: str | None = None
         self.role: str | None = None
-        self._password: str | None = None
 
     @property
     def is_admin(self) -> bool:
-        
-        return self.role in (ROLE_ADMIN, ROLE_OPERATOR)
+        return self.role == ROLE_ADMIN
 
     @property
     def is_main_admin(self) -> bool:
@@ -27,16 +26,11 @@ class Session:
             return "Operator"
         return "User"
 
-    @property
-    def excel_password(self) -> str:
-        return self._password or "06082003"
-
     def login(self, username: str, password: str, role: str) -> None:
         self.username = username
-        self._password = password
         self.role = role
 
     def logout(self) -> None:
         self.username = None
-        self._password = None
         self.role = None
+        set_bearer_token(None)

@@ -4,6 +4,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
+from common.api_client import APIClientError
 from models.hv.gui.battery_parameters import build_battery_parameters_panel, set_battery_parameters
 from models.hv.gui.constants import VARIANT_OPTIONS, VARIANT_PARAMS, format_pack_qr_data, get_type_of_reess
 from models.hv.gui.layout import FIELD_FONT, FIELD_IPADY, HEADING_FONT, LABEL_FONT
@@ -205,10 +206,6 @@ class DummyIdGUI:
             category=category,
         )
 
-        dispatch_zpl(self.root, zpl, self.print_var.get(), default_name=f"dummy_{serial}.zpl", printer_name=PRINTER_DUMMY)
-
-        save_pack_serial(serial)
-
         now = datetime.now()
         record = ScanRecord(
             date=mfg_date,
@@ -225,10 +222,20 @@ class DummyIdGUI:
             serial_number=serial,
         )
         try:
-            excel_pw = self._session.excel_password if self._session else "06082003"
-            append_scan_record(record, excel_password=excel_pw)
-        except Exception as exc:
-            messagebox.showwarning("Log Error", f"Could not write to scan log:\n{exc}", "colse the excel sheet and try again", parent=self.root)
+            append_scan_record(record)
+            save_pack_serial(serial)
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server unavailable",
+                f"Could not save the scan. Printing is blocked until the server is reachable.\n\n{exc}",
+                parent=self.root,
+            )
+            return
+
+        dispatch_zpl(
+            self.root, zpl, self.print_var.get(),
+            default_name=f"dummy_{serial}.zpl", printer_name=PRINTER_DUMMY,
+        )
 
         self.serial_entry_var.set("")
         self._parsed_serial = None

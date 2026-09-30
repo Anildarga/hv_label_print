@@ -13,6 +13,7 @@ import tkinter as tk
 # from tkinter import ttk
 
 
+from common.api_client import APIClientError
 from common.auth.machine_lock import is_authorized
 from common.auth.session import Session
 from models.hv.app import HVApp
@@ -85,7 +86,17 @@ def main() -> None:
     #     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     #     return base / relative
 
-    if not is_authorized():
+    try:
+        authorized = is_authorized()
+    except APIClientError as exc:
+        root.withdraw()
+        messagebox.showerror(
+            "Server unavailable",
+            f"Cannot verify this machine or print labels until the server is reachable.\n\n{exc}",
+        )
+        root.destroy()
+        return
+    if not authorized:
         root.withdraw()  # never show the main window
         # _show_unauthorized_dialog
         messagebox.showwarning("Warning", "This Machine is not Authorized")
@@ -108,7 +119,16 @@ def main() -> None:
     _install_error_dialog(root)
 
     session = Session() # logged out by default — AuthBar shows its own Login button
-    HVApp(root, session=session).pack(fill=tk.BOTH, expand=False)
+    try:
+        HVApp(root, session=session).pack(fill=tk.BOTH, expand=False)
+    except APIClientError as exc:
+        messagebox.showerror(
+            "Server unavailable",
+            f"Could not load server-backed serial data. Printing is blocked until the server is reachable.\n\n{exc}",
+            parent=root,
+        )
+        root.destroy()
+        return
     
 
     root.mainloop()

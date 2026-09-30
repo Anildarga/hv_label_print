@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from common.api_client import APIClientError
 from models.hv.gui.auth_dialog import ManageUsersDialog
 from models.hv.session.scan_log import (
     ScanRecord,
@@ -11,9 +12,7 @@ from models.hv.session.scan_log import (
     patch_admin_ack,
 )
 from models.hv.session.bms_scan_log import load_rework_records as load_bms_rework_records
-from models.hv.session.bms_scan_log import open_log_file as open_bms_log_file
 from models.hv.session.pack_id_scan_log import load_all_records as load_pack_id_records
-from models.hv.session.pack_id_scan_log import open_log_file as open_pack_id_log_file
 
 _DEFECT_COLS = [
     ("date",           "Date",              90),
@@ -29,7 +28,7 @@ _DEFECT_COLS = [
 
 class AdminSettingsDialog(tk.Toplevel):
 
-    def __init__(self, parent: tk.Misc, *, current_user: str, excel_password: str) -> None:
+    def __init__(self, parent: tk.Misc, *, current_user: str) -> None:
         super().__init__(parent)
         self.title("Admin Settings")
         self.geometry("1200x600")
@@ -37,7 +36,6 @@ class AdminSettingsDialog(tk.Toplevel):
         self.transient(parent.winfo_toplevel())
 
         self._current_user = current_user
-        self._excel_password = excel_password
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -96,7 +94,6 @@ class AdminSettingsDialog(tk.Toplevel):
         tree = self._build_readonly_log_section(
             parent, cols,
             load_fn=lambda: [rec for _row, rec in load_bms_rework_records()],
-            open_excel_fn=open_bms_log_file,
             empty_text="No reworked bmb and cmb entries yet.",
         )
         self._bms_log_tree = tree
@@ -113,13 +110,12 @@ class AdminSettingsDialog(tk.Toplevel):
         tree = self._build_readonly_log_section(
             parent, cols,
             load_fn=load_pack_id_records,
-            open_excel_fn=open_pack_id_log_file,
             empty_text="No Battery Pack ID scans logged yet.",
         )
         self._pack_id_log_tree = tree
 
     def _build_readonly_log_section(
-        self, parent: ttk.Frame, cols: list[tuple[str, str, int]], *, load_fn, open_excel_fn, empty_text: str,
+        self, parent: ttk.Frame, cols: list[tuple[str, str, int]], *, load_fn, empty_text: str,
     ) -> ttk.Treeview:
         top = ttk.Frame(parent, padding=(4, 8))
         top.pack(fill=tk.X)
@@ -127,7 +123,6 @@ class AdminSettingsDialog(tk.Toplevel):
         ttk.Label(top, textvariable=status_var, foreground="#555").pack(side=tk.LEFT)
         btns = ttk.Frame(top)
         btns.pack(side=tk.RIGHT)
-        ttk.Button(btns, text="Open Excel", command=lambda: self._open_excel_safe(open_excel_fn)).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(btns, text="Refresh", command=lambda: self._refresh_all()).pack(side=tk.LEFT)
 
         table_frame = ttk.Frame(parent)
@@ -151,23 +146,28 @@ class AdminSettingsDialog(tk.Toplevel):
         tree.delete(*tree.get_children())
         try:
             records = load_fn()
-        except Exception:
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server error", f"Could not load scan log:\n{exc}", parent=self
+            )
             records = []
         for i, rec in enumerate(records):
             values = [getattr(rec, key) for key, _l, _w in cols]
-            tree.insert("", tk.END, iid=str(i), values=values)
+            record_id = str(getattr(rec, "id", "") or "")
+            if not record_id:
+                messagebox.showerror(
+                    "Server error",
+                    "Server returned a scan record without its database id.",
+                    parent=self,
+                )
+                return
+            tree.insert("", tk.END, iid=record_id, values=values)
         status_var.set(f"{len(records)} entr{'y' if len(records) == 1 else 'ies'}" if records else empty_text)
-
-    def _open_excel_safe(self, open_fn) -> None:
-        try:
-            open_fn()
-        except Exception as exc:
-            messagebox.showerror("Excel error", f"Could not open log file:\n{exc}", parent=self)
 
     # ── Defect Log / Messages 
     def _build_defect_section(
         self, parent: ttk.Frame, *, only_unacknowledged: bool, empty_text: str
-    ) -> tuple[ttk.Treeview, dict[str, tuple[int, ScanRecord]]]:
+    ) -> tuple[ttk.Treeview, dict[str, tuple[str, ScanRecord]]]:
         top = ttk.Frame(parent, padding=(4, 8))
         top.pack(fill=tk.X)
         status_var = tk.StringVar(value=empty_text)
@@ -199,14 +199,14 @@ class AdminSettingsDialog(tk.Toplevel):
         )
         save_btn.pack(side=tk.LEFT)
 
-        rows_by_iid: dict[str, tuple[int, ScanRecord]] = {}
+        rows_by_iid: dict[str, tuple[str, ScanRecord]] = {}
 
         def _on_select(_event=None) -> None:
             sel = tree.selection()
             if not sel:
                 ack_var.set("")
                 return
-            _row, rec = rows_by_iid.get(sel[0], (None, None))
+            _record_id, rec = rows_by_iid.get(sel[0], (None, None))
             ack_var.set(rec.admin_ack if rec else "")
 
         tree.bind("<<TreeviewSelect>>", _on_select)
@@ -221,7 +221,7 @@ class AdminSettingsDialog(tk.Toplevel):
     def _populate(
         self,
         tree: ttk.Treeview,
-        rows_by_iid: dict[str, tuple[int, ScanRecord]],
+        rows_by_iid: dict[str, tuple[str, ScanRecord]],
         status_var: tk.StringVar,
         only_unacknowledged: bool,
         empty_text: str,
@@ -229,15 +229,24 @@ class AdminSettingsDialog(tk.Toplevel):
         tree.delete(*tree.get_children())
         rows_by_iid.clear()
 
-        data = load_unacknowledged_issues() if only_unacknowledged else [
-            (row, rec) for row, rec in load_all_records_with_rows() if rec.has_issue
-        ]
+        try:
+            data = load_unacknowledged_issues() if only_unacknowledged else [
+                (record_id, rec)
+                for record_id, rec in load_all_records_with_rows()
+                if rec.has_issue
+            ]
+        except APIClientError as exc:
+            status_var.set("Could not load defects from the server.")
+            messagebox.showerror(
+                "Server error", f"Could not load defect log:\n{exc}", parent=self
+            )
+            return
 
-        for row, rec in data:
-            iid = str(row)
+        for record_id, rec in data:
+            iid = str(record_id)
             values = [getattr(rec, key) for key, _l, _w in _DEFECT_COLS]
             tree.insert("", tk.END, iid=iid, values=values)
-            rows_by_iid[iid] = (row, rec)
+            rows_by_iid[iid] = (record_id, rec)
 
         if data:
             status_var.set(f"{len(data)} entr{'y' if len(data) == 1 else 'ies'}")
@@ -253,7 +262,7 @@ class AdminSettingsDialog(tk.Toplevel):
     def _save_ack(
         self,
         tree: ttk.Treeview,
-        rows_by_iid: dict[str, tuple[int, ScanRecord]],
+        rows_by_iid: dict[str, tuple[str, ScanRecord]],
         ack_var: tk.StringVar,
         status_var: tk.StringVar,
         only_unacknowledged: bool,
@@ -262,8 +271,14 @@ class AdminSettingsDialog(tk.Toplevel):
         if not sel:
             messagebox.showwarning("warning", "Select a row first.", parent=self)
             return
-        row, rec = rows_by_iid[sel[0]]
-        ok = patch_admin_ack(row, ack_var.get().strip(), excel_password=self._excel_password)
+        record_id, rec = rows_by_iid[sel[0]]
+        try:
+            ok = patch_admin_ack(record_id, ack_var.get().strip())
+        except APIClientError as exc:
+            messagebox.showerror(
+                "Server error", f"Could not save acknowledgement:\n{exc}", parent=self
+            )
+            return
         if not ok:
             messagebox.showerror("error", "Could not save. Refresh and try again.", parent=self)
             return
@@ -271,5 +286,5 @@ class AdminSettingsDialog(tk.Toplevel):
         self._refresh_all()
 
 
-def open_admin_settings(parent: tk.Misc, *, current_user: str, excel_password: str) -> None:
-    AdminSettingsDialog(parent, current_user=current_user, excel_password=excel_password)
+def open_admin_settings(parent: tk.Misc, *, current_user: str) -> None:
+    AdminSettingsDialog(parent, current_user=current_user)

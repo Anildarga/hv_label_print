@@ -4,6 +4,7 @@ import tkinter as tk
 from collections.abc import Callable
 from tkinter import ttk
 
+from common.api_client import APIClientError
 from common.auth.session import Session
 from models.hv.gui.admin_settings_dialog import open_admin_settings
 from models.hv.gui.auth_dialog import open_login_dialog
@@ -52,7 +53,16 @@ class AuthBar(ttk.Frame):
         if self._notified_this_session:
             return
         self._notified_this_session = True
-        count = len(load_unacknowledged_issues())
+        try:
+            count = len(load_unacknowledged_issues())
+        except APIClientError as exc:
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Server error",
+                f"Could not load unacknowledged issues:\n{exc}",
+                parent=self.winfo_toplevel(),
+            )
+            return
         if count:
             from tkinter import messagebox
             plural = "entry" if count == 1 else "entries"
@@ -70,7 +80,6 @@ class AuthBar(ttk.Frame):
             open_admin_settings(
                 self.winfo_toplevel(),
                 current_user=self.session.username,
-                excel_password=self.session.excel_password,
             )
 
     def _handle_login(self, username: str, password: str, role: str) -> None:

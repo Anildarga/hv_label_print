@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from common.api_client import APIClientError
 from models.hv.gui.constants import VARIANT_OPTIONS
 from models.hv.gui.print_actions import dispatch_zpl
 from models.hv.printing.constants import PRINTER_DUMMY
@@ -11,9 +11,9 @@ from models.hv.printing.labels import build_battery_pack_id_label, build_bmb_cmb
 
 # Three separate logs, one per screen — see session/scan_log.py,
 # session/pack_id_scan_log.py, session/bms_scan_log.py.
-from models.hv.session.scan_log import load_all_records as load_dummy_records, open_log_file as open_dummy_log_file
-from models.hv.session.pack_id_scan_log import load_all_records as load_pack_id_records, open_log_file as open_pack_id_log_file
-from models.hv.session.bms_scan_log import load_all_records as load_bms_records, open_log_file as open_bms_log_file
+from models.hv.session.scan_log import load_all_records as load_dummy_records
+from models.hv.session.pack_id_scan_log import load_all_records as load_pack_id_records
+from models.hv.session.bms_scan_log import load_all_records as load_bms_records
 
 _ORIGIN_LABELS = {"dummy": "Battery Pack Dummy ID", "pack_id": "Battery Pack ID", "bmb_cmb": "BMB / CMB ID"}
 
@@ -84,7 +84,7 @@ class ScanHistoryDialog(tk.Toplevel):
         self._origin = origin  
         self._col_defs = _COL_DEFS[origin]
         self._records: list = []
-        self._last_mtime: float = 0.0
+        self._records_by_id: dict[str, object] = {}
         self._auto_refresh_id: str | None = None
 
         self._build_ui()
@@ -101,7 +101,6 @@ class ScanHistoryDialog(tk.Toplevel):
 
         btn_frame = ttk.Frame(top)
         btn_frame.pack(side=tk.RIGHT)
-        ttk.Button(btn_frame, text="Open Excel", command=self._open_excel, width=12).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(btn_frame, text="Refresh", command=self._load_records, width=10).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(btn_frame, text="Reprint Selected", command=self._on_reprint, width=16).pack(side=tk.LEFT)
 
@@ -133,39 +132,51 @@ class ScanHistoryDialog(tk.Toplevel):
         self._status_var = tk.StringVar(value="")
         ttk.Label(self, textvariable=self._status_var, font=("Segoe UI", 9), padding=(10, 4)).pack(anchor=tk.W)
 
-    def _log_file_for_origin(self):
-        if self._origin == "pack_id":
-            from models.hv.session.pack_id_scan_log import LOG_FILE
-        elif self._origin == "bmb_cmb":
-            from models.hv.session.bms_scan_log import LOG_FILE
-        else:
-            from models.hv.session.scan_log import LOG_FILE
-        return LOG_FILE
-
-    def _load_records(self) -> None:
-        if self._origin == "pack_id":
-            self._records = load_pack_id_records()
-        elif self._origin == "bmb_cmb":
-            self._records = load_bms_records()
-        else:
-            self._records = load_dummy_records()
-
+    def _load_records(self, *, show_error: bool = True) -> bool:
         try:
-            log_file = self._log_file_for_origin()
-            if log_file.exists():
-                self._last_mtime = os.path.getmtime(str(log_file))
-        except Exception:
-            pass
+            if self._origin == "pack_id":
+                records = load_pack_id_records()
+            elif self._origin == "bmb_cmb":
+                records = load_bms_records()
+            else:
+                records = load_dummy_records()
+        except APIClientError as exc:
+            self._status_var.set(f"Server error: {exc}")
+            if show_error:
+                messagebox.showerror(
+                    "Server unavailable",
+                    f"Could not load scan history:\n{exc}",
+                    parent=self,
+                )
+            return False
+
+        self._records = records
+        self._records_by_id = {
+            str(record.id): record for record in records if getattr(record, "id", "")
+        }
+
+        if len(self._records_by_id) != len(records):
+            error = APIClientError("Server returned a scan record without its database id.")
+            self._status_var.set(f"Server error: {error}")
+            if show_error:
+                messagebox.showerror("Invalid server response", str(error), parent=self)
+            return False
 
         for item in self.tree.get_children():
             self.tree.delete(item)
 
         col_ids = [c[0] for c in self._col_defs]
         for idx, rec in enumerate(self._records):
+            record_id = str(getattr(rec, "id", ""))
             tag = "even" if idx % 2 == 0 else "odd"
-            values = [idx + 1 if col_id == "sl_no" else getattr(rec, self._attr_for(col_id), "") for col_id in col_ids]
-            self.tree.insert("", tk.END, iid=str(idx), values=values, tags=(tag,))
+            values = [
+                getattr(rec, "sl_no", None) if col_id == "sl_no"
+                else getattr(rec, self._attr_for(col_id), "")
+                for col_id in col_ids
+            ]
+            self.tree.insert("", tk.END, iid=record_id, values=values, tags=(tag,))
         self._status_var.set(f"{len(self._records)} record(s) loaded.")
+        return True
 
     def _attr_for(self, col_id: str) -> str:
         return {
@@ -174,18 +185,11 @@ class ScanHistoryDialog(tk.Toplevel):
         }.get(col_id, col_id)
 
     def _start_auto_refresh(self) -> None:
-        self._check_file_modified()
+        self._check_server_records()
 
-    def _check_file_modified(self) -> None:
-        try:
-            log_file = self._log_file_for_origin()
-            if log_file.exists():
-                current_mtime = os.path.getmtime(str(log_file))
-                if current_mtime > self._last_mtime and self._last_mtime > 0:
-                    self._load_records()
-        except Exception:
-            pass
-        self._auto_refresh_id = self.after(3000, self._check_file_modified)
+    def _check_server_records(self) -> None:
+        self._load_records(show_error=False)
+        self._auto_refresh_id = self.after(3000, self._check_server_records)
 
     def _on_close(self) -> None:
         if self._auto_refresh_id:
@@ -197,8 +201,14 @@ class ScanHistoryDialog(tk.Toplevel):
         if not selection:
             messagebox.showwarning("Reprint", "Select a row to reprint.", parent=self)
             return
-        idx = int(selection[0])
-        rec = self._records[idx]
+        record_id = selection[0]
+        if not self._load_records():
+            return
+        rec = self._records_by_id.get(record_id)
+        if rec is None:
+            messagebox.showerror("Reprint", "Record is no longer available. Refresh history.", parent=self)
+            return
+        idx = int(getattr(rec, "sl_no", 0) or 0)
 
         if self._origin == "pack_id":
             self._reprint_pack_id(idx, rec)
@@ -284,17 +294,6 @@ class ScanHistoryDialog(tk.Toplevel):
         dispatch_zpl(self, zpl, self._print_mode, default_name=f"reprint_bmb_cmb_{idx+1}.zpl", printer_name=PRINTER_DUMMY)
         note = " (using rework ID)" if (rec.rework_bmb_id.strip() or rec.rework_cmb_id.strip()) else ""
         self._status_var.set(f"Reprinted (bmb_cmb) row {idx + 1}{note}")
-
-    def _open_excel(self) -> None:
-        try:
-            if self._origin == "pack_id":
-                open_pack_id_log_file()
-            elif self._origin == "bmb_cmb":
-                open_bms_log_file()
-            else:
-                open_dummy_log_file()
-        except Exception as exc:
-            messagebox.showerror("Open Excel", f"Could not open log file:\n{exc}", parent=self)
 
     def _center_over_parent(self, parent: tk.Misc) -> None:
         p = parent.winfo_toplevel()

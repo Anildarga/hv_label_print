@@ -23,6 +23,7 @@ a = Analysis(
         ('models/hv/assets/logo.ico', 'models/hv/assets'),
         ('models/hv/data', 'models/hv/data'),
         ('common/data', 'common/data'),
+        ('common/api_config.json', 'common'),
     ],
     hiddenimports=hidden,
     hookspath=[],
